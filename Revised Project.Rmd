@@ -1,0 +1,225 @@
+
+Input data and clean column name
+```{r}
+result <- read.csv(file=file.choose()) #purchasing
+productInfo <- read.csv(file=file.choose()) #productinfo
+branchLocation <- read.csv(file=file.choose()) #mappingforsale
+result 
+productInfo
+branchLocation
+#clean the required dataset colum
+colnames(result) <- c("billNumber","date","branch","product","quantity")
+```
+
+
+Merge Data with ProductInofo
+```{r}
+require(sqldf)
+merge <- sqldf("Select * From [result] INNER JOIN [productInfo] ON result.product = productinfo.'product.Name'")
+merge <- merge[,-c(6,7,8)]
+merge
+```
+
+
+Merge Data with branch Loaction
+```{r}
+mapping = sqldf("Select * From [merge] LEFT JOIN [branchLocation] ON merge.branch = branchLocation.landmark")
+mapping
+```
+
+Calculate Revenue
+```{r}
+mapping$Revenue = mapping$Price * mapping$quantity
+mapping
+```
+
+Summarise the Revuene by branch and Manuifactor
+```{r}
+final = NULL
+branch = levels(factor(mapping$branch))
+# branch = unique(mapping$branch)
+branch
+
+for(n in 1:length(branch)){
+  partial = data.frame(branch[n], t(tapply(mapping[mapping$branch==branch[n],]$Revenue, mapping[mapping$branch==branch[n],]$Manuifactor, sum)))
+  final =rbind(final, partial)
+}
+
+colnames(final) = c("branch", "AGP", "HobbyJapan","KOTOBUKIYA")
+finalMapping <- sqldf("select * from [final] LEFT JOIN [branchLocation] ON final.branch = branchLocation.landmark")
+finalMapping$landmark <- NULL
+finalMapping
+
+```
+
+Time-series analysis
+```{r}
+#Sys.setlocale(locale = "C") Ensure output is English
+Sys.setlocale(locale = "C")
+
+#Convert all date to timestamp
+mapping$date = as.Date(mapping$date)
+mapping$date
+mapping$Revenue
+#calculate time-series Revenue and form as data frame
+times = data.frame(mapping$date, mapping$Revenue)
+times
+#Extract Month value from dataframe
+
+times$month = format(times$mapping.date, "%B")
+times
+
+times = tapply(times$mapping.Revenue, times$month, sum)
+times
+#Calculate Monthly Revenue
+times <- as.data.frame(times)
+times$month <- rownames(times)
+times <- times[order(factor(times$month,levels=month.name)),]
+times
+#plot time-series trend by monthly basis
+plot.ts(times$times)
+
+```
+
+The EM algorithm
+```{r}
+#install.packages("mixtools")
+require(mixtools)
+
+#calculate a column of data about total number of quantity from each bill
+mapping
+
+bill = tapply(mapping$quantity, mapping$billNumber, sum)
+bill
+
+
+
+bill <- as.data.frame(bill)
+bill$billNumber <- rownames(bill)
+bill <- bill[order(factor(bill$billNumber,levels=bill$billNumber.name)),]
+bill
+#EM model
+bill1 = normalmixEM(bill$bill, k=2, fast=TRUE)
+plot(bill1, density=TRUE, cex.axis=1.4,cex.lab=1, cex.main=1.8, whichplot=2, xlab2="Minutes",ask=FALSE)
+
+```
+
+clustering
+```{r}
+#install.packages("mclust")
+require(mclust)
+
+#build columns of data about Revenue from each bill
+mapping
+clust = tapply(mapping$Revenue, mapping$billNumber, sum)
+clust
+clust <- as.data.frame(clust)
+clust$billNumber <- rownames(clust)
+clust <- clust[order(factor(clust$billNumber,levels=clust$billNumber.name)),]
+
+#build columns of data about total number of quantity from each bill
+clust1 = tapply(mapping$quantity, mapping$billNumber, sum)
+clust1
+clust1 <- as.data.frame(clust1)
+clust1$billNumber <- rownames(clust1)
+clust1 <- clust1[order(factor(clust1$billNumber,levels=clust1$billNumber.name)),]
+
+#build are dataframe based on above data column
+clustering = data.frame(clust$billNumber, clust$clust,clust1$clust1)
+
+colnames(clustering)= c("billNumber", "Revenue", "quantity")
+clustering
+#add a new column of data about average revenue of each bill
+clustering$averageR = clustering$Revenue/clustering$quantity
+clustering$averageR
+clustering
+#cluster the result
+
+Marks = data.frame(clustering$quantity,clustering$averageR)
+Marks
+fit = Mclust(Marks, G=3)
+plot(fit,what="classification")
+
+```
+
+
+
+
+Customer behavour
+```{r}
+#install.packages("rpart","rpart.plot")
+require(rpart)
+require(rpart.plot)
+
+#split
+data = mapping[, c(4,5,6,7)]
+data
+
+data$Manuifactor[data$Manuifactor == "KOTOBUKIYA"] <- 1
+data$Manuifactor[data$Manuifactor == "Hobby Japan"] <- 2
+data$Manuifactor[data$Manuifactor == "AGP"] <- 3
+data
+
+train <- sample(nrow(data),0.8*nrow(data))
+training <- data[train,]
+testing <- data[-train,]
+#plot the tree
+
+
+model <- rpart(product ~ .,data=training)
+prp(model, faclen =0, fallen.leaves = TRUE, shadow.col = "pink",extra = 3)
+
+
+
+
+```
+
+
+
+
+
+
+Plot Revenue Map
+```{r}
+require(rworldmap)
+require(rworldxtra)
+require(Hmisc)
+
+newmap <- getMap(resolution = "high")
+plot(newmap, xlim=c(min(mapping$lon)-0.12,max(mapping$lon)+0.12), ylim=c(min(mapping$lat)-0.12,max(mapping$lat)+0.12),asp=1)
+for (i in seq(nrow(finalMapping))) {
+  subplot(barplot(height=as.integer(unname(unlist(finalMapping[finalMapping$branch==branch[i],c(2,3,4)]))), axes=F, col=rainbow(3)),
+  x=finalMapping[finalMapping$branch==branch[i],6], y=finalMapping[finalMapping$branch==branch[i],5], size=c(.15, .15))
+  text(x = finalMapping[finalMapping$branch==branch[i],6], y=finalMapping[finalMapping$branch==branch[i],5], branch[i],cex=.7,pos=1)
+}
+legend("topright", c("AGP","HobbyJapan","KOTOBUKIYA"),xpd=T,inset=c(0,0.5),col=rainbow(3),cex=0.6,bty = "n",lwd = 3)
+
+
+```
+
+For Evaluation part
+1.How many products would you expected the customer to buy each time?
+The expected quantity of the good sold for each bill is around 11- 12. Therefore, the expected value is 11 to 12.
+
+
+
+2.When is “retails winter” in this company and why?
+
+Retail winter is Jan and Mar because the total revenue is the lowest in the year. 
+
+
+3.Which manuifacturs product(s) performs the best Revenue and why? (Hints: you may make assumption based on outcomes of the Revenue from branches by manufacturers)
+
+Hobby Japan has the highest number of income on the branch graph.
+
+
+4.How many types of potential customer are there? Who are they?
+There are three types of clients.One buy a few quantity with low average price per item. One buy a lot of quantity with low average price per item. The last one is proportionate witht the number and price of item. 
+
+
+5.State at least one customer decision-making pattern.
+
+
+Customer will first consider the manufacturer and then price range will determine the major product name. 
+
+
